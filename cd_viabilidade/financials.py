@@ -21,8 +21,9 @@ class FinancialSummary:
 
 def compute_financials(assignments: pd.DataFrame, cost_matrix: pd.DataFrame, unit_revenue: float, fixed_cost: float) -> FinancialSummary:
     """Calcula receita, custos e margem."""
-    merged = assignments.merge(cost_matrix[["facility_id", "client_id", "unit_cost"]], on=["facility_id", "client_id"])
-    variable_cost = float(merged["unit_cost"].sum())
+    cost_column = "unit_cost" if "unit_cost" in cost_matrix.columns else "freight_cost"
+    merged = assignments.merge(cost_matrix[["facility_id", "client_id", cost_column]], on=["facility_id", "client_id"])
+    variable_cost = float(merged[cost_column].sum())
     revenue = float(len(merged) * unit_revenue)
     margin = revenue - variable_cost - fixed_cost
     summary = FinancialSummary(revenue=revenue, variable_cost=variable_cost, fixed_cost=fixed_cost, margin=margin)

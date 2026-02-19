@@ -1,6 +1,7 @@
-"""Modelo de localização de instalações com otimização linear."""
+"""Modelo de localização de instalações com otimização linear inteira mista (MILP)."""
 
-from typing import Dict, List, Tuple
+from dataclasses import dataclass
+from typing import Dict, List
 
 import pandas as pd
 import pulp
@@ -10,44 +11,121 @@ from .logging_config import configure_logging
 logger = configure_logging(logger_name=__name__)
 
 
+@dataclass(frozen=True)
+class SolutionResult:
+    """Resultado tipado da otimização de localização de CDs."""
+
+    open_facilities: List[str]
+    total_cost: float
+    fixed_cost: float
+    variable_cost: float
+    allocation: Dict[str, str]
+
+
 def solve_facility_location(
     cost_matrix: pd.DataFrame,
     fixed_costs: pd.DataFrame,
-    max_facilities: int,
-) -> Tuple[List[str], pd.DataFrame, float]:
-    """Resolve problema de localização de facilidades com atribuição única por cliente."""
-    facilities = fixed_costs["facility_id"].tolist()
-    clients = sorted(cost_matrix["client_id"].unique().tolist())
-    c = {(r.facility_id, r.client_id): r.unit_cost for r in cost_matrix.itertuples()}
-    f = dict(zip(fixed_costs["facility_id"], fixed_costs["fixed_cost"]))
+    max_new_facilities: int | None = None,
+    capacity_by_facility: Dict[str, float] | None = None,
+    demand_by_client: Dict[str, float] | None = None,
+) -> SolutionResult:
+    """Resolve o problema de localização de instalações com atribuição única por demanda.
+
+    Espera as colunas:
+    - ``cost_matrix``: ``facility_id``, ``client_id``, ``unit_cost``.
+    - ``fixed_costs``: ``facility_id``, ``fixed_cost``.
+
+    Args:
+        cost_matrix: custos variáveis de atendimento cliente-CD.
+        fixed_costs: custos fixos de abertura por CD candidato.
+        max_new_facilities: limite opcional de número de CDs abertos (k).
+        capacity_by_facility: capacidade opcional por CD.
+        demand_by_client: demanda opcional por cliente (usa 1.0 por padrão).
+    """
+    facilities = fixed_costs["facility_id"].astype(str).tolist()
+    clients = sorted(cost_matrix["client_id"].astype(str).unique().tolist())
+
+    cost_column = "unit_cost" if "unit_cost" in cost_matrix.columns else "freight_cost"
+    variable_cost = {
+        (str(row.facility_id), str(row.client_id)): float(getattr(row, cost_column))
+        for row in cost_matrix.dropna(subset=[cost_column]).itertuples(index=False)
+    }
+    fixed_cost = {
+        str(row.facility_id): float(row.fixed_cost)
+        for row in fixed_costs.itertuples(index=False)
+    }
+
+    if "demanda" in cost_matrix.columns:
+        inferred_demand = (
+            cost_matrix[["client_id", "demanda"]]
+            .drop_duplicates(subset=["client_id"])
+            .set_index("client_id")["demanda"]
+            .astype(float)
+            .to_dict()
+        )
+    else:
+        inferred_demand = {}
+
+    client_demand = {client: float(inferred_demand.get(client, 1.0)) for client in clients}
+    if demand_by_client is not None:
+        client_demand.update({str(k): float(v) for k, v in demand_by_client.items()})
 
     model = pulp.LpProblem("facility_location", pulp.LpMinimize)
-    open_var = pulp.LpVariable.dicts("open", facilities, 0, 1, pulp.LpBinary)
-    assign_var = pulp.LpVariable.dicts("assign", (facilities, clients), 0, 1, pulp.LpBinary)
+
+    y = pulp.LpVariable.dicts("y", facilities, 0, 1, pulp.LpBinary)
+    x = pulp.LpVariable.dicts("x", (clients, facilities), 0, 1, pulp.LpBinary)
+
+    for client in clients:
+        for facility in facilities:
+            if (facility, client) not in variable_cost:
+                raise ValueError(f"Custo ausente para facility_id={facility}, client_id={client}")
 
     model += (
-        pulp.lpSum(f[fac] * open_var[fac] for fac in facilities)
-        + pulp.lpSum(c[(fac, cli)] * assign_var[fac][cli] for fac in facilities for cli in clients)
+        pulp.lpSum(variable_cost[(facility, client)] * x[client][facility] for client in clients for facility in facilities)
+        + pulp.lpSum(fixed_cost[facility] * y[facility] for facility in facilities)
     )
 
-    for cli in clients:
-        model += pulp.lpSum(assign_var[fac][cli] for fac in facilities) == 1
+    for client in clients:
+        model += pulp.lpSum(x[client][facility] for facility in facilities) == 1
 
-    for fac in facilities:
-        for cli in clients:
-            model += assign_var[fac][cli] <= open_var[fac]
+    for client in clients:
+        for facility in facilities:
+            model += x[client][facility] <= y[facility]
 
-    model += pulp.lpSum(open_var[fac] for fac in facilities) <= max_facilities
+    if capacity_by_facility is not None:
+        for facility in facilities:
+            capacity = float(capacity_by_facility[facility])
+            model += (
+                pulp.lpSum(client_demand[client] * x[client][facility] for client in clients)
+                <= capacity
+            )
 
-    model.solve(pulp.PULP_CBC_CMD(msg=False))
+    if max_new_facilities is not None:
+        model += pulp.lpSum(y[facility] for facility in facilities) <= max_new_facilities
 
-    selected = [fac for fac in facilities if pulp.value(open_var[fac]) > 0.5]
-    assignments = []
-    for fac in facilities:
-        for cli in clients:
-            if pulp.value(assign_var[fac][cli]) > 0.5:
-                assignments.append({"facility_id": fac, "client_id": cli})
+    status = model.solve(pulp.PULP_CBC_CMD(msg=False))
+    if pulp.LpStatus[status] != "Optimal":
+        raise RuntimeError(f"Solver não encontrou solução ótima. Status: {pulp.LpStatus[status]}")
+
+    open_facilities = [facility for facility in facilities if pulp.value(y[facility]) > 0.5]
+    allocation = {
+        client: facility
+        for client in clients
+        for facility in facilities
+        if pulp.value(x[client][facility]) > 0.5
+    }
 
     total_cost = float(pulp.value(model.objective))
-    logger.info("Otimização concluída com %d instalações abertas", len(selected))
-    return selected, pd.DataFrame(assignments), total_cost
+    total_fixed_cost = float(sum(fixed_cost[facility] for facility in open_facilities))
+    total_variable_cost = float(
+        sum(variable_cost[(facility, client)] for client, facility in allocation.items())
+    )
+
+    logger.info("Otimização concluída com %d instalações abertas", len(open_facilities))
+    return SolutionResult(
+        open_facilities=open_facilities,
+        total_cost=total_cost,
+        fixed_cost=total_fixed_cost,
+        variable_cost=total_variable_cost,
+        allocation=allocation,
+    )
