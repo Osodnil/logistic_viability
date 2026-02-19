@@ -1,4 +1,6 @@
-facility_id,name,lat,lon
-F1,CD Norte,-23.5505,-46.6333
-F2,CD Sul,-22.9068,-43.1729
-F3,CD Centro,-19.9167,-43.9345
+facility_id,name,city,uf,lat,lon,ocupacao,capacidade_m2
+F1,CD Norte,Sao Paulo,SP,-23.5505,-46.6333,0.82,6200
+F2,CD Sul,Rio de Janeiro,RJ,-22.9068,-43.1729,0.74,5000
+F3,CD Centro,Belo Horizonte,MG,-19.9167,-43.9345,0.68,4300
+F4,Candidato Curitiba,Curitiba,PR,-25.4284,-49.2733,0.55,3900
+F5,Candidato Goiania,Goiania,GO,-16.6869,-49.2648,0.50,3600
