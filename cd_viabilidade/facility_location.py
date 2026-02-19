@@ -31,8 +31,28 @@ def solve_facility_location(
     forced_open_facilities: Iterable[str] | None = None,
     candidate_facilities: Iterable[str] | None = None,
     min_total_open_facilities: int | None = None,
-) -> SolutionResult:
-    """Resolve o problema de localização de instalações com atribuição única por demanda.
+ ) -> SolutionResult:
+     """Resolve o problema de localização de instalações com atribuição única por demanda.
++
++    # Normaliza/valida interseção entre instalações forçadas abertas e candidatas
++    if forced_open_facilities is not None and candidate_facilities is not None:
++        forced_open_set = set(forced_open_facilities)
++        candidate_set = set(candidate_facilities)
++        intersection = forced_open_set & candidate_set
++
++        if intersection:
++            # Se o número máximo de novas instalações for menor que a interseção,
++            # o modelo ficaria inviável pela combinação das restrições.
++            if max_new_facilities is not None and len(intersection) > max_new_facilities:
++                raise ValueError(
++                    "Configuração inválida: existem instalações em comum entre "
++                    "`forced_open_facilities` e `candidate_facilities` cujo número "
++                    "excede `max_new_facilities`, o que tornaria o problema inviável. "
++                    f"Instalações em conflito: {sorted(intersection)}"
++                )
++
++            # Remove as instalações já forçadas abertas do conjunto de candidatas
++            candidate_facilities = [f for f in candidate_facilities if f not in forced_open_set]
 
     Espera as colunas:
     - ``cost_matrix``: ``facility_id``, ``client_id``, ``unit_cost`` ou ``freight_cost``.
