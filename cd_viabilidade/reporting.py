@@ -44,48 +44,56 @@ def generate_executive_report(
     output_dir: Path = Path("outputs"),
 ) -> Path:
     """Gera relatório executivo com recomendação acionável baseada no cenário base."""
-    required = {"base", "1_novo_cd", "2_novos_cds"}
-    missing = required.difference(scenario_costs) | required.difference(scenario_indicators)
-    if missing:
-        raise ValueError(f"Cenários obrigatórios ausentes para relatório executivo: {sorted(missing)}")
+    if "base" not in scenario_costs or "base" not in scenario_indicators:
+        raise ValueError("Cenário 'base' é obrigatório no relatório executivo")
+
+    shared_scenarios = sorted(set(scenario_costs).intersection(scenario_indicators))
+    if not shared_scenarios:
+        raise ValueError("Nenhum cenário comum entre custos e indicadores")
 
     base_cost = scenario_costs["base"]
-    cost_1 = scenario_costs["1_novo_cd"]
-    cost_2 = scenario_costs["2_novos_cds"]
-
-    cost_delta_1 = base_cost - cost_1
-    cost_delta_2 = base_cost - cost_2
-
     base_ind = scenario_indicators["base"]
-    one_ind = scenario_indicators["1_novo_cd"]
-    two_ind = scenario_indicators["2_novos_cds"]
 
-    recommendation = "Manter cenário base"
-    if one_ind.npv > base_ind.npv and one_ind.npv >= two_ind.npv:
-        recommendation = "Avançar com abertura de 1 novo CD"
-    elif two_ind.npv > base_ind.npv and two_ind.npv > one_ind.npv:
-        recommendation = "Avançar com abertura de 2 novos CDs"
+    candidate_names = [name for name in shared_scenarios if name != "base"]
+    best_name = "base"
+    best_npv = base_ind.npv
+    for name in candidate_names:
+        if scenario_indicators[name].npv > best_npv:
+            best_npv = scenario_indicators[name].npv
+            best_name = name
+
+    if best_name == "base":
+        recommendation = "Manter cenário base"
+    else:
+        recommendation = f"Avançar com cenário {best_name}"
+
+    summary_lines = [f"- {name}: custo anual {scenario_costs[name]:.2f}" for name in shared_scenarios]
+    comparative_lines = [
+        f"- {name} vs base: redução anual estimada {base_cost - scenario_costs[name]:.2f}"
+        for name in candidate_names
+    ]
+    indicator_lines = [
+        (
+            f"- {name}: VPL={scenario_indicators[name].npv:.2f}, "
+            f"Payback={_format_payback(scenario_indicators[name].payback_simple)}, "
+            f"Payback descontado={_format_payback(scenario_indicators[name].payback_discounted)}, "
+            f"ROI={scenario_indicators[name].roi:.2%}"
+        )
+        for name in shared_scenarios
+    ]
 
     content = "\n".join(
         [
             "# Relatório Executivo de Viabilidade",
             "",
             "## Resumo dos cenários",
-            f"- base: custo anual {base_cost:.2f}",
-            f"- 1_novo_cd: custo anual {cost_1:.2f}",
-            f"- 2_novos_cds: custo anual {cost_2:.2f}",
+            *summary_lines,
             "",
             "## Custos comparativos",
-            f"- Redução anual estimada com 1 novo CD vs base: {cost_delta_1:.2f}",
-            f"- Redução anual estimada com 2 novos CDs vs base: {cost_delta_2:.2f}",
+            *comparative_lines,
             "",
             "## Indicadores financeiros",
-            f"- base: VPL={base_ind.npv:.2f}, Payback={_format_payback(base_ind.payback_simple)}, "
-            f"Payback descontado={_format_payback(base_ind.payback_discounted)}, ROI={base_ind.roi:.2%}",
-            f"- 1_novo_cd: VPL={one_ind.npv:.2f}, Payback={_format_payback(one_ind.payback_simple)}, "
-            f"Payback descontado={_format_payback(one_ind.payback_discounted)}, ROI={one_ind.roi:.2%}",
-            f"- 2_novos_cds: VPL={two_ind.npv:.2f}, Payback={_format_payback(two_ind.payback_simple)}, "
-            f"Payback descontado={_format_payback(two_ind.payback_discounted)}, ROI={two_ind.roi:.2%}",
+            *indicator_lines,
             "",
             "## Recomendação acionável",
             f"- {recommendation}, priorizando critérios financeiros de VPL e recuperação de investimento.",

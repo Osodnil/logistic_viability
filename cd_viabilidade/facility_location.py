@@ -1,7 +1,7 @@
 """Modelo de localização de instalações com otimização linear inteira mista (MILP)."""
 
 from dataclasses import dataclass
-from typing import Dict, List
+from typing import Dict, Iterable, List
 
 import pandas as pd
 import pulp
@@ -28,19 +28,15 @@ def solve_facility_location(
     max_new_facilities: int | None = None,
     capacity_by_facility: Dict[str, float] | None = None,
     demand_by_client: Dict[str, float] | None = None,
+    forced_open_facilities: Iterable[str] | None = None,
+    candidate_facilities: Iterable[str] | None = None,
+    min_total_open_facilities: int | None = None,
 ) -> SolutionResult:
     """Resolve o problema de localização de instalações com atribuição única por demanda.
 
     Espera as colunas:
-    - ``cost_matrix``: ``facility_id``, ``client_id``, ``unit_cost``.
+    - ``cost_matrix``: ``facility_id``, ``client_id``, ``unit_cost`` ou ``freight_cost``.
     - ``fixed_costs``: ``facility_id``, ``fixed_cost``.
-
-    Args:
-        cost_matrix: custos variáveis de atendimento cliente-CD.
-        fixed_costs: custos fixos de abertura por CD candidato.
-        max_new_facilities: limite opcional de número de CDs abertos (k).
-        capacity_by_facility: capacidade opcional por CD.
-        demand_by_client: demanda opcional por cliente (usa 1.0 por padrão).
     """
     facilities = fixed_costs["facility_id"].astype(str).tolist()
     clients = sorted(cost_matrix["client_id"].astype(str).unique().tolist())
@@ -54,6 +50,19 @@ def solve_facility_location(
         str(row.facility_id): float(row.fixed_cost)
         for row in fixed_costs.itertuples(index=False)
     }
+
+    forced_open = {str(f) for f in (forced_open_facilities or [])}
+    unknown_forced = sorted(forced_open - set(facilities))
+    if unknown_forced:
+        raise ValueError(f"Facilities forçadas ausentes em fixed_costs: {unknown_forced}")
+
+    if candidate_facilities is None:
+        candidate_set = set(facilities) - forced_open
+    else:
+        candidate_set = {str(f) for f in candidate_facilities}
+        unknown_candidates = sorted(candidate_set - set(facilities))
+        if unknown_candidates:
+            raise ValueError(f"Facilities candidatas ausentes em fixed_costs: {unknown_candidates}")
 
     if "demanda" in cost_matrix.columns:
         inferred_demand = (
@@ -92,6 +101,9 @@ def solve_facility_location(
         for facility in facilities:
             model += x[client][facility] <= y[facility]
 
+    for facility in forced_open:
+        model += y[facility] == 1
+
     if capacity_by_facility is not None:
         for facility in facilities:
             capacity = float(capacity_by_facility[facility])
@@ -101,7 +113,10 @@ def solve_facility_location(
             )
 
     if max_new_facilities is not None:
-        model += pulp.lpSum(y[facility] for facility in facilities) <= max_new_facilities
+        model += pulp.lpSum(y[facility] for facility in candidate_set) <= max_new_facilities
+
+    if min_total_open_facilities is not None:
+        model += pulp.lpSum(y[facility] for facility in facilities) >= int(min_total_open_facilities)
 
     status = model.solve(pulp.PULP_CBC_CMD(msg=False))
     if pulp.LpStatus[status] != "Optimal":

@@ -15,10 +15,22 @@ pip install -e .
 No diretório `data/`:
 
 - `clients.csv`: `client_id, city, demand|demanda, lat, lon`
-- `facilities.csv`: `facility_id, name, lat, lon`
-- `fixed_costs.csv`: `facility_id, fixed_cost`
+- `facilities.csv`: `facility_id, name, city, uf, lat, lon, ocupacao, capacidade_m2, is_existing`
+- `fixed_costs.csv`: `facility_id, fixed_cost` (**opcional se usar estimativa automática**)
+- `regional_costs.csv` (opcional, usado para calcular custo fixo automaticamente):
+  - `uf, labor_cost_index, real_estate_cost_m2, tax_factor, transport_factor`
 
-Exemplo mínimo já disponível no repositório em `data/*.csv`.
+### Estimativa automática de custos fixos
+
+Se `fixed_costs.csv` **não existir**, o pipeline passa a estimar os custos fixos por CD a partir de:
+
+- índice de mão de obra regional;
+- custo imobiliário regional por m²;
+- fator tributário por UF;
+- fator de transporte (proxy de custo inbound);
+- ocupação/capacidade da instalação.
+
+Resultado salvo em: `outputs/fixed_costs_estimados.csv`.
 
 ## CLI
 
@@ -45,7 +57,7 @@ Parâmetros globais opcionais:
   - `outputs/relatorio_<cenario>.md`
   - `outputs/mapa_<cenario>.html`
 - `run-scenarios`: roda lote de cenários e salva `outputs/comparativo_cenarios.csv`.
-- `generate-report`: gera `outputs/relatorio_executivo.md` comparando `base`, `1_novo_cd` e `2_novos_cds`.
+- `generate-report`: gera `outputs/relatorio_executivo.md` com todos os cenários configurados (incluindo `base`, `1_novo_cd`, `2_novos_cds`, tributário/salarial/crescimento).
 - `serve-api`: imprime comando `uvicorn` para subir a API.
 
 ## API FastAPI
@@ -96,3 +108,6 @@ Também é possível rodar o notebook:
 - `notebooks/demo_viabilidade.ipynb`
 
 Ele executa o fluxo completo e salva artefatos em `outputs/`.
+
+
+> Dica: com `is_existing=1`, o cenário `base` força CDs atuais abertos e evita abertura de novos; os cenários `1_novo_cd` e `2_novos_cds` liberam respectivamente 1 ou 2 novos candidatos.
