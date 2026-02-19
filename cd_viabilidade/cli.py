@@ -24,20 +24,21 @@ def run_pipeline(config: AppConfig) -> dict:
     fixed_costs = load_csv(config.data_dir / "fixed_costs.csv")
 
     matrix = build_cost_matrix(facilities, clients)
-    selected, assignments, total_cost = solve_facility_location(matrix, fixed_costs, config.default_facility_limit)
-    fixed_selected = float(
-        fixed_costs.loc[fixed_costs["facility_id"].isin(selected), "fixed_cost"].sum()
+    result = solve_facility_location(matrix, fixed_costs, config.default_facility_limit)
+    selected = result.open_facilities
+    assignments = pd.DataFrame(
+        [{"client_id": client, "facility_id": facility} for client, facility in result.allocation.items()]
     )
-    summary = compute_financials(assignments, matrix, config.default_unit_revenue, fixed_selected)
+    summary = compute_financials(assignments, matrix, config.default_unit_revenue, result.fixed_cost)
 
     map_path = build_map(facilities, clients, config.output_dir / "mapa.html")
-    report_path = write_markdown_report(config.output_dir / "relatorio.md", selected, summary, total_cost)
+    report_path = write_markdown_report(config.output_dir / "relatorio.md", selected, summary, result.total_cost)
 
     assignments.to_csv(config.output_dir / "assignments.csv", index=False)
     logger.info("Pipeline executado com sucesso")
     return {
         "selected_facilities": selected,
-        "total_cost": total_cost,
+        "total_cost": result.total_cost,
         "report": str(report_path),
         "map": str(map_path),
     }
