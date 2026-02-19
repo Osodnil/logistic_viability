@@ -9,6 +9,7 @@ import pandas as pd
 
 from .auto_costs import estimate_fixed_costs
 from .config import AppConfig
+from .auto_costs import estimate_fixed_costs
 from .cost_matrix import build_cost_matrix
 from .data_io import load_csv
 from .facility_location import solve_facility_location
@@ -60,11 +61,18 @@ def execute_scenario(config: AppConfig, scenario_name: str = "base", scenario: S
 
     facilities = load_csv(config.data_dir / "facilities.csv")
     clients = load_csv(config.data_dir / "clients.csv")
-    fixed_costs = _resolve_fixed_costs(config, facilities)
+    fixed_costs_path = config.data_dir / "fixed_costs.csv"
+    regional_costs_path = config.data_dir / "regional_costs.csv"
 
-    demand_col = _demand_column(clients)
-    scenario_clients = clients.copy()
-    scenario_clients["demanda"] = scenario_clients[demand_col].astype(float) * (1 + scenario_cfg.crescimento_demanda)
+    if fixed_costs_path.exists():
+        fixed_costs = load_csv(fixed_costs_path)
+    elif regional_costs_path.exists():
+        regional_costs = load_csv(regional_costs_path)
+        fixed_costs = estimate_fixed_costs(facilities, regional_costs)
+        config.output_dir.mkdir(parents=True, exist_ok=True)
+        fixed_costs.to_csv(config.output_dir / "fixed_costs_estimados.csv", index=False)
+    else:
+        raise FileNotFoundError("Forneça data/fixed_costs.csv ou data/regional_costs.csv para estimar custos")
 
     cost_matrix = build_cost_matrix(
         facilities,

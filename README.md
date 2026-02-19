@@ -15,7 +15,7 @@ pip install -e .
 No diretório `data/`:
 
 - `clients.csv`: `client_id, city, demand|demanda, lat, lon`
-- `facilities.csv`: `facility_id, name, city, uf, lat, lon, ocupacao, capacidade_m2, is_existing`
+- `facilities.csv`: `facility_id, name, city, uf, lat, lon, ocupacao, capacidade_m2`
 - `fixed_costs.csv`: `facility_id, fixed_cost` (**opcional se usar estimativa automática**)
 - `regional_costs.csv` (opcional, usado para calcular custo fixo automaticamente):
   - `uf, labor_cost_index, real_estate_cost_m2, tax_factor, transport_factor`
