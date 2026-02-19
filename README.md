@@ -57,7 +57,7 @@ Parâmetros globais opcionais:
   - `outputs/relatorio_<cenario>.md`
   - `outputs/mapa_<cenario>.html`
 - `run-scenarios`: roda lote de cenários e salva `outputs/comparativo_cenarios.csv`.
-- `generate-report`: gera `outputs/relatorio_executivo.md` comparando `base`, `1_novo_cd` e `2_novos_cds`.
+- `generate-report`: gera `outputs/relatorio_executivo.md` com todos os cenários configurados (incluindo `base`, `1_novo_cd`, `2_novos_cds`, tributário/salarial/crescimento).
 - `serve-api`: imprime comando `uvicorn` para subir a API.
 
 ## API FastAPI
@@ -108,3 +108,6 @@ Também é possível rodar o notebook:
 - `notebooks/demo_viabilidade.ipynb`
 
 Ele executa o fluxo completo e salva artefatos em `outputs/`.
+
+
+> Dica: com `is_existing=1`, o cenário `base` força CDs atuais abertos e evita abertura de novos; os cenários `1_novo_cd` e `2_novos_cds` liberam respectivamente 1 ou 2 novos candidatos.

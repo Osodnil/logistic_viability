@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pandas as pd
 
+from .auto_costs import estimate_fixed_costs
 from .config import AppConfig
 from .auto_costs import estimate_fixed_costs
 from .cost_matrix import build_cost_matrix
@@ -23,6 +24,35 @@ logger = configure_logging(logger_name=__name__)
 
 def _demand_column(df: pd.DataFrame) -> str:
     return "demanda" if "demanda" in df.columns else "demand"
+
+
+def _resolve_fixed_costs(config: AppConfig, facilities: pd.DataFrame) -> pd.DataFrame:
+    fixed_costs_path = config.data_dir / "fixed_costs.csv"
+    regional_costs_path = config.data_dir / "regional_costs.csv"
+
+    if fixed_costs_path.exists():
+        return load_csv(fixed_costs_path)
+    if regional_costs_path.exists():
+        regional_costs = load_csv(regional_costs_path)
+        fixed_costs = estimate_fixed_costs(facilities, regional_costs)
+        config.output_dir.mkdir(parents=True, exist_ok=True)
+        fixed_costs.to_csv(config.output_dir / "fixed_costs_estimados.csv", index=False)
+        return fixed_costs
+    raise FileNotFoundError("Forneça data/fixed_costs.csv ou data/regional_costs.csv para estimar custos")
+
+
+def _resolve_facility_groups(facilities: pd.DataFrame) -> tuple[list[str], list[str]]:
+    """Retorna (existing, candidates) com base em `is_existing` quando disponível."""
+    if "is_existing" not in facilities.columns:
+        all_ids = facilities["facility_id"].astype(str).tolist()
+        return [], all_ids
+
+    flags = facilities["is_existing"].astype(str).str.lower().map({"1": True, "true": True, "yes": True, "sim": True})
+    is_existing = flags.astype("boolean").fillna(False)
+
+    existing = facilities.loc[is_existing, "facility_id"].astype(str).tolist()
+    candidates = facilities.loc[~is_existing, "facility_id"].astype(str).tolist()
+    return existing, candidates
 
 
 def execute_scenario(config: AppConfig, scenario_name: str = "base", scenario: ScenarioConfig | None = None) -> dict:
@@ -46,23 +76,32 @@ def execute_scenario(config: AppConfig, scenario_name: str = "base", scenario: S
 
     cost_matrix = build_cost_matrix(
         facilities,
-        clients,
+        scenario_clients,
         scenario_params={
             "tributacao": scenario_cfg.fator_tributario,
             "salario_logistica": scenario_cfg.fator_salarial,
         },
     )
 
-    if scenario_cfg.crescimento_demanda:
-        demand_col = _demand_column(clients)
-        base_demand = clients[demand_col].astype(float) * (1 + scenario_cfg.crescimento_demanda)
-        demand_map = dict(zip(clients["client_id"].astype(str), base_demand.astype(float)))
-        cost_matrix["demanda"] = cost_matrix["client_id"].astype(str).map(demand_map)
+    existing, candidates = _resolve_facility_groups(facilities)
+
+    if scenario_name == "base" and existing:
+        max_new = 0
+        min_total_open = len(existing)
+    elif scenario_cfg.limite_novos_cds is not None and existing:
+        max_new = scenario_cfg.limite_novos_cds
+        min_total_open = len(existing) + scenario_cfg.limite_novos_cds
+    else:
+        max_new = scenario_cfg.limite_novos_cds or config.default_facility_limit
+        min_total_open = None
 
     result = solve_facility_location(
         cost_matrix,
         fixed_costs,
-        max_new_facilities=scenario_cfg.limite_novos_cds or config.default_facility_limit,
+        max_new_facilities=max_new,
+        forced_open_facilities=existing,
+        candidate_facilities=candidates,
+        min_total_open_facilities=min_total_open,
     )
     assignments = pd.DataFrame(
         [{"client_id": client, "facility_id": facility} for client, facility in result.allocation.items()]
@@ -72,7 +111,7 @@ def execute_scenario(config: AppConfig, scenario_name: str = "base", scenario: S
     scenario_slug = scenario_name.replace(" ", "_")
     map_path = build_map(
         facilities,
-        clients,
+        scenario_clients,
         config.output_dir / f"mapa_{scenario_slug}.html",
         selected_facilities=result.open_facilities,
         assignments=assignments,
@@ -113,7 +152,7 @@ def run_scenarios(config: AppConfig) -> pd.DataFrame:
     output_path.parent.mkdir(parents=True, exist_ok=True)
     comparative.to_csv(output_path, index=False)
 
-    for scenario_name in ["base", "1_novo_cd", "2_novos_cds"]:
+    for scenario_name in DEFAULT_SCENARIOS:
         execute_scenario(config, scenario_name)
 
     logger.info("Comparativo de cenários salvo em %s", output_path)
@@ -121,8 +160,8 @@ def run_scenarios(config: AppConfig) -> pd.DataFrame:
 
 
 def generate_report(config: AppConfig) -> Path:
-    """Gera relatório executivo consolidando base, 1 e 2 novos CDs."""
-    scenario_outputs = {name: execute_scenario(config, name) for name in ["base", "1_novo_cd", "2_novos_cds"]}
+    """Gera relatório executivo consolidando todos os cenários configurados."""
+    scenario_outputs = {name: execute_scenario(config, name) for name in DEFAULT_SCENARIOS}
 
     horizon = 5
     rate = 0.12

@@ -27,3 +27,31 @@ def test_solve_facility_location_returns_deterministic_solution():
     assert result.fixed_cost == 1.0
     assert result.variable_cost == 6.0
     assert result.total_cost == 7.0
+
+
+def test_forced_existing_and_new_limit_constraints():
+    cost_matrix = pd.DataFrame(
+        [
+            {"facility_id": "E1", "client_id": "C1", "unit_cost": 100},
+            {"facility_id": "E2", "client_id": "C1", "unit_cost": 100},
+            {"facility_id": "N1", "client_id": "C1", "unit_cost": 1},
+        ]
+    )
+    fixed_costs = pd.DataFrame(
+        [
+            {"facility_id": "E1", "fixed_cost": 10},
+            {"facility_id": "E2", "fixed_cost": 10},
+            {"facility_id": "N1", "fixed_cost": 10},
+        ]
+    )
+
+    result = solve_facility_location(
+        cost_matrix,
+        fixed_costs,
+        max_new_facilities=1,
+        forced_open_facilities=["E1", "E2"],
+        candidate_facilities=["N1"],
+        min_total_open_facilities=3,
+    )
+
+    assert set(result.open_facilities) == {"E1", "E2", "N1"}
