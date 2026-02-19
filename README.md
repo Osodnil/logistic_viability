@@ -15,10 +15,22 @@ pip install -e .
 No diretório `data/`:
 
 - `clients.csv`: `client_id, city, demand|demanda, lat, lon`
-- `facilities.csv`: `facility_id, name, lat, lon`
-- `fixed_costs.csv`: `facility_id, fixed_cost`
+- `facilities.csv`: `facility_id, name, city, uf, lat, lon, ocupacao, capacidade_m2`
+- `fixed_costs.csv`: `facility_id, fixed_cost` (**opcional se usar estimativa automática**)
+- `regional_costs.csv` (opcional, usado para calcular custo fixo automaticamente):
+  - `uf, labor_cost_index, real_estate_cost_m2, tax_factor, transport_factor`
 
-Exemplo mínimo já disponível no repositório em `data/*.csv`.
+### Estimativa automática de custos fixos
+
+Se `fixed_costs.csv` **não existir**, o pipeline passa a estimar os custos fixos por CD a partir de:
+
+- índice de mão de obra regional;
+- custo imobiliário regional por m²;
+- fator tributário por UF;
+- fator de transporte (proxy de custo inbound);
+- ocupação/capacidade da instalação.
+
+Resultado salvo em: `outputs/fixed_costs_estimados.csv`.
 
 ## CLI
 
