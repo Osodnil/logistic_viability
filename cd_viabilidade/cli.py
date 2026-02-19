@@ -1,5 +1,7 @@
 """Interface de linha de comando para pipeline de viabilidade."""
 
+from __future__ import annotations
+
 import argparse
 from pathlib import Path
 
@@ -9,39 +11,122 @@ from .config import AppConfig
 from .cost_matrix import build_cost_matrix
 from .data_io import load_csv
 from .facility_location import solve_facility_location
-from .financials import compute_financials
+from .financials import calculate_financial_indicators, compute_financials
 from .logging_config import configure_logging
 from .mapping import build_map
-from .reporting import write_markdown_report
+from .reporting import generate_executive_report, write_markdown_report
+from .scenarios import DEFAULT_SCENARIOS, ScenarioConfig, run_scenarios_batch
 
 logger = configure_logging(logger_name=__name__)
 
 
-def run_pipeline(config: AppConfig) -> dict:
-    """Executa pipeline completo e retorna artefatos."""
+def _demand_column(df: pd.DataFrame) -> str:
+    return "demanda" if "demanda" in df.columns else "demand"
+
+
+def execute_scenario(config: AppConfig, scenario_name: str = "base", scenario: ScenarioConfig | None = None) -> dict:
+    """Executa cenário único, salva artefatos e retorna resumo."""
+    scenario_cfg = scenario or DEFAULT_SCENARIOS.get(scenario_name, ScenarioConfig())
+
     facilities = load_csv(config.data_dir / "facilities.csv")
     clients = load_csv(config.data_dir / "clients.csv")
     fixed_costs = load_csv(config.data_dir / "fixed_costs.csv")
 
-    matrix = build_cost_matrix(facilities, clients)
-    result = solve_facility_location(matrix, fixed_costs, config.default_facility_limit)
-    selected = result.open_facilities
+    cost_matrix = build_cost_matrix(
+        facilities,
+        clients,
+        scenario_params={
+            "tributacao": scenario_cfg.fator_tributario,
+            "salario_logistica": scenario_cfg.fator_salarial,
+        },
+    )
+
+    if scenario_cfg.crescimento_demanda:
+        demand_col = _demand_column(clients)
+        base_demand = clients[demand_col].astype(float) * (1 + scenario_cfg.crescimento_demanda)
+        demand_map = dict(zip(clients["client_id"].astype(str), base_demand.astype(float)))
+        cost_matrix["demanda"] = cost_matrix["client_id"].astype(str).map(demand_map)
+
+    result = solve_facility_location(
+        cost_matrix,
+        fixed_costs,
+        max_new_facilities=scenario_cfg.limite_novos_cds or config.default_facility_limit,
+    )
     assignments = pd.DataFrame(
         [{"client_id": client, "facility_id": facility} for client, facility in result.allocation.items()]
     )
-    summary = compute_financials(assignments, matrix, config.default_unit_revenue, result.fixed_cost)
+    summary = compute_financials(assignments, cost_matrix, config.default_unit_revenue, result.fixed_cost)
 
-    map_path = build_map(facilities, clients, config.output_dir / "mapa.html")
-    report_path = write_markdown_report(config.output_dir / "relatorio.md", selected, summary, result.total_cost)
+    scenario_slug = scenario_name.replace(" ", "_")
+    map_path = build_map(
+        facilities,
+        clients,
+        config.output_dir / f"mapa_{scenario_slug}.html",
+        selected_facilities=result.open_facilities,
+        assignments=assignments,
+    )
+    report_path = write_markdown_report(
+        config.output_dir / f"relatorio_{scenario_slug}.md",
+        result.open_facilities,
+        summary,
+        result.total_cost,
+    )
+    assignments.to_csv(config.output_dir / f"assignments_{scenario_slug}.csv", index=False)
 
-    assignments.to_csv(config.output_dir / "assignments.csv", index=False)
-    logger.info("Pipeline executado com sucesso")
     return {
-        "selected_facilities": selected,
+        "scenario": scenario_name,
+        "selected_facilities": result.open_facilities,
         "total_cost": result.total_cost,
+        "fixed_cost": result.fixed_cost,
+        "variable_cost": result.variable_cost,
         "report": str(report_path),
         "map": str(map_path),
     }
+
+
+def run_pipeline(config: AppConfig, scenario_name: str = "base") -> dict:
+    """Executa pipeline completo para um cenário."""
+    out = execute_scenario(config=config, scenario_name=scenario_name)
+    logger.info("Pipeline executado com sucesso no cenário %s", scenario_name)
+    return out
+
+
+def run_scenarios(config: AppConfig) -> pd.DataFrame:
+    """Executa cenários em lote e salva comparativo."""
+    facilities = load_csv(config.data_dir / "facilities.csv")
+    clients = load_csv(config.data_dir / "clients.csv")
+
+    comparative = run_scenarios_batch(facilities, clients, DEFAULT_SCENARIOS)
+    output_path = config.output_dir / "comparativo_cenarios.csv"
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    comparative.to_csv(output_path, index=False)
+
+    for scenario_name in ["base", "1_novo_cd", "2_novos_cds"]:
+        execute_scenario(config, scenario_name)
+
+    logger.info("Comparativo de cenários salvo em %s", output_path)
+    return comparative
+
+
+def generate_report(config: AppConfig) -> Path:
+    """Gera relatório executivo consolidando base, 1 e 2 novos CDs."""
+    scenario_outputs = {name: execute_scenario(config, name) for name in ["base", "1_novo_cd", "2_novos_cds"]}
+
+    horizon = 5
+    rate = 0.12
+    baseline = scenario_outputs["base"]["total_cost"]
+    scenario_costs = {name: data["total_cost"] for name, data in scenario_outputs.items()}
+    scenario_indicators = {
+        name: calculate_financial_indicators(
+            initial_investment=data["fixed_cost"],
+            annual_savings=baseline - data["total_cost"],
+            horizon_years=horizon,
+            discount_rate=rate,
+        )
+        for name, data in scenario_outputs.items()
+    }
+
+    return generate_executive_report(scenario_costs, scenario_indicators, output_dir=config.output_dir)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -51,6 +136,16 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--output-dir", type=Path, default=AppConfig().output_dir)
     parser.add_argument("--facility-limit", type=int, default=AppConfig().default_facility_limit)
     parser.add_argument("--unit-revenue", type=float, default=AppConfig().default_unit_revenue)
+
+    subparsers = parser.add_subparsers(dest="command", required=True)
+
+    run_pipeline_parser = subparsers.add_parser("run-pipeline", help="Executa cenário único")
+    run_pipeline_parser.add_argument("--scenario", default="base")
+
+    subparsers.add_parser("run-scenarios", help="Executa lote de cenários")
+    subparsers.add_parser("generate-report", help="Gera relatório executivo")
+    subparsers.add_parser("serve-api", help="Mostra comando para iniciar API")
+
     return parser
 
 
@@ -63,8 +158,18 @@ def main() -> None:
         default_facility_limit=args.facility_limit,
         default_unit_revenue=args.unit_revenue,
     )
-    result = run_pipeline(config)
-    print(pd.Series(result).to_string())
+
+    if args.command == "run-pipeline":
+        result = run_pipeline(config, scenario_name=args.scenario)
+        print(pd.Series(result).to_string())
+    elif args.command == "run-scenarios":
+        df = run_scenarios(config)
+        print(df.to_string(index=False))
+    elif args.command == "generate-report":
+        report_path = generate_report(config)
+        print(f"Relatório gerado em: {report_path}")
+    elif args.command == "serve-api":
+        print("uvicorn cd_viabilidade.api:app --host 0.0.0.0 --port 8000")
 
 
 if __name__ == "__main__":
